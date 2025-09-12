@@ -1,0 +1,13 @@
+# Voicepeak API テスト用 Python依存関係
+
+# Python test requirements
+
+# HTTP requests
+requests>=2.31.0
+
+# Testing framework
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+
+# Environment variables
+python-dotenv>=1.0.0

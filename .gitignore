@@ -1,0 +1,30 @@
+# Voicepeak API 開発用 .gitignore
+
+# Python 仮想環境
+venv/
+__pycache__/
+*.pyc
+
+# Node.js
+node_modules/
+
+# テスト生成ファイル
+*.wav
+*.log
+
+# 環境設定
+.env
+
+
+# Docker関連
+*.pid
+*.sock
+
+# OS/エディタ
+.DS_Store
+Thumbs.db
+.vscode/
+
+# その他一時ファイル
+*.tmp
+*.bak
