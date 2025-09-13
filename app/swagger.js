@@ -141,7 +141,7 @@ const options = {
             speaker_uuid: {
               type: 'string',
               description: 'スピーカー固有ID',
-              example: 'voicepeak-miyamai-moca'
+              example: '1'
             },
             styles: {
               type: 'array',
@@ -627,7 +627,7 @@ const options = {
                   example: [
                     {
                       name: 'Miyamai Moca',
-                      speaker_uuid: 'voicepeak-miyamai-moca',
+                      speaker_uuid: '1',
                       styles: [
                         { name: 'bosoboso', id: 2041348160, type: 'talk' },
                         { name: 'doyaru', id: 2041348161, type: 'talk' },

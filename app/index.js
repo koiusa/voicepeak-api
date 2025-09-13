@@ -12,11 +12,38 @@ import swaggerUi from 'swagger-ui-express';
 import { specs } from './swagger.js';
 import { VoiceVoxAdapter } from './voicevox-adapter.js';
 
-// .envファイルを読み込み（appディレクトリから）
-expand.expand(config());
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+// ログファイルの設定
+const LOG_FILE = path.join(__dirname, '..', 'app.log');
+
+// カスタムログ関数
+function writeLog(message, level = 'INFO') {
+    const timestamp = new Date().toISOString();
+    const logMessage = `[${timestamp}] [${level}] ${message}\n`;
+    
+    // コンソールとファイルの両方に出力
+    process.stdout.write(logMessage);
+    fs.appendFileSync(LOG_FILE, logMessage);
+}
+
+// console.logをオーバーライド
+const originalConsoleLog = console.log;
+const originalConsoleError = console.error;
+
+console.log = (...args) => {
+    const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)).join(' ');
+    writeLog(message, 'INFO');
+};
+
+console.error = (...args) => {
+    const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)).join(' ');
+    writeLog(message, 'ERROR');
+};
+
+// .envファイルを読み込み（appディレクトリから）
+expand.expand(config());
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -36,7 +63,30 @@ if (voiceVoxEnabled) {
 }
 
 app.use(cors());
-app.use(express.json({ limit: '1mb' }));
+
+// リクエストログミドルウェア
+app.use((req, res, next) => {
+    const timestamp = new Date().toISOString();
+    const method = req.method;
+    const url = req.url;
+    const ip = req.ip || req.connection.remoteAddress || '127.0.0.1';
+    
+    console.log(`[${timestamp}] ${method} ${url} - ${ip}`);
+    
+    // レスポンス完了時のログ
+    const originalEnd = res.end;
+    res.end = function(...args) {
+        console.log(`[${timestamp}] ${method} ${url} - ${res.statusCode} - ${ip}`);
+        originalEnd.apply(this, args);
+    };
+    
+    next();
+});
+
+// JSONボディパーサーを/audio_query以外に適用
+app.use('/api', express.json({ limit: '1mb' }));
+app.use('/speakers', express.json({ limit: '1mb' }));
+app.use('/synthesis', express.json({ limit: '1mb' }));
 
 // Swagger UI ドキュメント
 app.use('/docs', swaggerUi.serve, swaggerUi.setup(specs, {
@@ -433,7 +483,6 @@ app.get('/speakers', async (req, res) => {
         SecurityUtils.checkRateLimit(clientIp, RATE_LIMIT_GET_REQUESTS, RATE_LIMIT_WINDOW_MS);
         
         console.log('VoiceVox互換: スピーカー一覧要求');
-        
         // Voicepeakのナレーター一覧を取得
         const result = await SecurityUtils.safeExec(voicepeakPath, [
             '--list-narrator'
@@ -465,7 +514,7 @@ app.get('/speakers', async (req, res) => {
                 }));
                 
                 // ナレーター名からUUIDを生成
-                const speakerUuid = `voicepeak-${narrator.replace(/\s+/g, '-').toLowerCase()}`;
+                const speakerUuid = 1;//`voicepeak-${narrator.replace(/\s+/g, '-').toLowerCase()}`;
                 
                 speakers.push({
                     name: narrator,
@@ -483,7 +532,7 @@ app.get('/speakers', async (req, res) => {
             } catch (emotionError) {
                 console.error(`感情取得エラー (${narrator}):`, emotionError);
                 // 感情取得に失敗した場合はデフォルトスタイルを使用
-                const speakerUuid = `voicepeak-${narrator.replace(/\s+/g, '-').toLowerCase()}`;
+                const speakerUuid = 1;//`voicepeak-${narrator.replace(/\s+/g, '-').toLowerCase()}`;
                 speakers.push({
                     name: narrator,
                     speaker_uuid: speakerUuid,
@@ -540,10 +589,15 @@ app.post('/audio_query', async (req, res) => {
         const clientIp = req.ip || req.connection.remoteAddress || '127.0.0.1';
         SecurityUtils.checkRateLimit(clientIp, RATE_LIMIT_POST_REQUESTS, RATE_LIMIT_WINDOW_MS);
         
+        // デバッグ用：受信したパラメータを表示
+        console.log('audio_query リクエスト:');
+        console.log('  クエリパラメータ:', req.query);
+        console.log('  ヘッダー:', req.headers);
+        
         // クエリパラメータとボディの両方をサポート
         const text = req.query?.text || req.body?.text;
         const speaker = req.query?.speaker || req.body?.speaker;
-        
+
         // テキストバリデーション
         if (!text) {
             return res.status(422).json({
@@ -559,7 +613,6 @@ app.post('/audio_query', async (req, res) => {
         
         // 安全なテキストバリデーション
         const validatedText = SecurityUtils.validateText(text);
-        
         // スピーカーIDバリデーション
         if (!speaker) {
             return res.status(422).json({
@@ -604,7 +657,6 @@ app.post('/audio_query', async (req, res) => {
         }
         
         console.log(`ナレーター情報: ${narratorInfo.narrator} - ${narratorInfo.emotion}`);
-        
         // VoiceVox互換のオーディオクエリ形式を生成
         // 実際の音声解析は行わず、標準的な構造を返す
         const audioQuery = {
@@ -701,7 +753,6 @@ app.post('/synthesis', async (req, res) => {
         
         const audioQuery = req.body;
         const { speaker } = req.query;
-        
         if (!audioQuery) {
             return res.status(422).json({
                 detail: [
@@ -744,6 +795,7 @@ app.post('/synthesis', async (req, res) => {
         
         // スピーカーIDからナレーターと感情を逆引き
         const narratorInfo = await findNarratorByStyleId(speakerId);
+
         if (!narratorInfo) {
             return res.status(422).json({
                 detail: [
@@ -952,4 +1004,15 @@ process.on('SIGTERM', () => {
 process.on('SIGINT', () => {
     console.log('SIGINT受信: サーバーを終了中...');
     process.exit(0);
+});
+
+// 未処理の例外もログに記録
+process.on('uncaughtException', (error) => {
+    console.error('未処理の例外:', error);
+    process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('未処理のPromise拒否:', reason);
+    process.exit(1);
 });
