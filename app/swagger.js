@@ -6,7 +6,7 @@ const options = {
     info: {
       title: 'Voicepeak API with VoiceVox Compatibility',
       version: '2.0.0',
-      description: 'VoicepeakエンジンのためのREST API。音声合成、ナレーター管理、感情パラメータの制御機能を提供します。VoiceVox互換API（port 10101）も含まれています。',
+      description: 'VoicepeakエンジンのためのREST API。音声合成、ナレーター管理、感情パラメータの制御機能を提供します。VoiceVox互換API（port 10101）も含まれています。\\n\\n**レート制限:**\\n- GET リクエスト: 50回/分\\n- POST リクエスト: 20回/分',
       contact: {
         name: 'API Support',
         email: 'support@voicepeak.example.com'
@@ -19,29 +19,16 @@ const options = {
     servers: [
       {
         url: `http://localhost:${process.env.PORT || 3000}`,
-        description: '開発サーバー'
+        description: '開発サーバー（Voicepeak API + VoiceVox互換）'
+      },
+      {
+        url: 'http://localhost:10101',
+        description: 'VoiceVox互換サーバー（標準ポート）'
       }
     ],
     components: {
       schemas: {
-        ErrorResponse: {
-          type: 'object',
-          properties: {
-            error: {
-              type: 'string',
-              description: 'エラーメッセージ'
-            },
-            keyword: {
-              type: 'string',
-              description: 'エラー種別識別子'
-            },
-            details: {
-              type: 'string',
-              description: '詳細なエラー情報（開発環境のみ）'
-            }
-          },
-          required: ['error']
-        },
+
         VoiceVoxErrorResponse: {
           type: 'object',
           properties: {
@@ -154,7 +141,7 @@ const options = {
             speaker_uuid: {
               type: 'string',
               description: 'スピーカー固有ID',
-              example: 'speaker-001'
+              example: 'voicepeak-miyamai-moca'
             },
             styles: {
               type: 'array',
@@ -169,11 +156,32 @@ const options = {
                   id: {
                     type: 'integer',
                     description: 'スタイルID',
-                    example: 1
+                    example: 2041348162
+                  },
+                  type: {
+                    type: 'string',
+                    description: 'スタイルタイプ',
+                    example: 'talk'
                   }
                 }
               },
               description: '利用可能なスタイル（感情）一覧'
+            },
+            version: {
+              type: 'string',
+              description: 'スピーカーバージョン',
+              example: '1.0.0'
+            },
+            supported_features: {
+              type: 'object',
+              properties: {
+                permitted_synthesis_morphing: {
+                  type: 'string',
+                  description: '音声合成モーフィング許可設定',
+                  example: 'ALL'
+                }
+              },
+              description: 'サポートされている機能'
             }
           },
           required: ['name', 'speaker_uuid', 'styles']
@@ -298,7 +306,7 @@ const options = {
               content: {
                 'application/json': {
                   schema: {
-                    $ref: '#/components/schemas/ErrorResponse'
+                    $ref: '#/components/schemas/VoiceVoxErrorResponse'
                   },
                   example: {
                     error: 'リクエスト制限に達しました。しばらく時間をおいてから再試行してください。',
@@ -312,7 +320,7 @@ const options = {
               content: {
                 'application/json': {
                   schema: {
-                    $ref: '#/components/schemas/ErrorResponse'
+                    $ref: '#/components/schemas/VoiceVoxErrorResponse'
                   },
                   example: {
                     error: 'ナレーター一覧の取得に失敗しました',
@@ -349,7 +357,7 @@ const options = {
               content: {
                 'application/json': {
                   schema: {
-                    $ref: '#/components/schemas/ErrorResponse'
+                    $ref: '#/components/schemas/VoiceVoxErrorResponse'
                   }
                 }
               }
@@ -359,7 +367,7 @@ const options = {
               content: {
                 'application/json': {
                   schema: {
-                    $ref: '#/components/schemas/ErrorResponse'
+                    $ref: '#/components/schemas/VoiceVoxErrorResponse'
                   },
                   example: {
                     error: '感情一覧の取得に失敗しました',
@@ -407,7 +415,7 @@ const options = {
               content: {
                 'application/json': {
                   schema: {
-                    $ref: '#/components/schemas/ErrorResponse'
+                    $ref: '#/components/schemas/VoiceVoxErrorResponse'
                   },
                   examples: {
                     'invalid-narrator': {
@@ -433,7 +441,7 @@ const options = {
               content: {
                 'application/json': {
                   schema: {
-                    $ref: '#/components/schemas/ErrorResponse'
+                    $ref: '#/components/schemas/VoiceVoxErrorResponse'
                   }
                 }
               }
@@ -443,7 +451,7 @@ const options = {
               content: {
                 'application/json': {
                   schema: {
-                    $ref: '#/components/schemas/ErrorResponse'
+                    $ref: '#/components/schemas/VoiceVoxErrorResponse'
                   }
                 }
               }
@@ -513,7 +521,7 @@ const options = {
               content: {
                 'application/json': {
                   schema: {
-                    $ref: '#/components/schemas/ErrorResponse'
+                    $ref: '#/components/schemas/VoiceVoxErrorResponse'
                   },
                   examples: {
                     'invalid-text': {
@@ -560,7 +568,7 @@ const options = {
               content: {
                 'application/json': {
                   schema: {
-                    $ref: '#/components/schemas/ErrorResponse'
+                    $ref: '#/components/schemas/VoiceVoxErrorResponse'
                   },
                   example: {
                     error: 'Voicepeakが音声ファイルを生成できませんでした。パラメータを確認してください。',
@@ -574,7 +582,7 @@ const options = {
               content: {
                 'application/json': {
                   schema: {
-                    $ref: '#/components/schemas/ErrorResponse'
+                    $ref: '#/components/schemas/VoiceVoxErrorResponse'
                   },
                   example: {
                     error: 'リクエスト制限に達しました。しばらく時間をおいてから再試行してください。',
@@ -588,7 +596,7 @@ const options = {
               content: {
                 'application/json': {
                   schema: {
-                    $ref: '#/components/schemas/ErrorResponse'
+                    $ref: '#/components/schemas/VoiceVoxErrorResponse'
                   },
                   example: {
                     error: '音声合成中にエラーが発生しました',
@@ -619,14 +627,18 @@ const options = {
                   example: [
                     {
                       name: 'Miyamai Moca',
-                      speaker_uuid: 'speaker-001',
+                      speaker_uuid: 'voicepeak-miyamai-moca',
                       styles: [
-                        { name: 'bosoboso', id: 1 },
-                        { name: 'doyaru', id: 2 },
-                        { name: 'honwaka', id: 3 },
-                        { name: 'angry', id: 4 },
-                        { name: 'teary', id: 5 }
-                      ]
+                        { name: 'bosoboso', id: 2041348160, type: 'talk' },
+                        { name: 'doyaru', id: 2041348161, type: 'talk' },
+                        { name: 'honwaka', id: 2041348162, type: 'talk' },
+                        { name: 'angry', id: 2041348163, type: 'talk' },
+                        { name: 'teary', id: 2041348164, type: 'talk' }
+                      ],
+                      version: '1.0.0',
+                      supported_features: {
+                        permitted_synthesis_morphing: 'ALL'
+                      }
                     }
                   ]
                 }
@@ -697,7 +709,7 @@ const options = {
                 type: 'integer'
               },
               description: 'スピーカー（スタイル）ID',
-              example: 3
+              example: 2041348162
             }
           ],
           responses: {
@@ -778,7 +790,7 @@ const options = {
         post: {
           tags: ['VoiceVox互換'],
           summary: '音声合成実行 (VoiceVox互換)',
-          description: 'VoiceVoxと互換性のある音声合成を実行します。オーディオクエリを受け取ってWAV音声ファイルを生成します。',
+          description: 'VoiceVoxと互換性のある音声合成を実行します。2つの形式をサポート: 1) 標準VoiceVoxワークフロー（オーディオクエリオブジェクト使用）、2) シンプルリクエスト（textパラメータ直接指定）',
           parameters: [
             {
               in: 'query',
@@ -788,7 +800,7 @@ const options = {
                 type: 'integer'
               },
               description: 'スピーカー（スタイル）ID',
-              example: 3
+              example: 2041348162
             }
           ],
           requestBody: {
