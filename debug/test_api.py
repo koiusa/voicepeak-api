@@ -91,7 +91,7 @@ def test_basic_synthesis():
         print(f"✗ エラー: {e}")
         return False
 
-def test_emotion_synthesis(emotions):
+def run_emotion_synthesis(emotions):
     """感情を指定した音声合成のテスト"""
     print("\n4. 感情指定音声合成...")
     if not emotions:
@@ -218,7 +218,7 @@ def main():
     narrators = test_narrators()
     emotions = test_emotions()
     basic_success = test_basic_synthesis()
-    emotion_success = test_emotion_synthesis(emotions)
+    emotion_success = run_emotion_synthesis(emotions)
     options_success = test_options_synthesis()
     test_error_cases()
     
