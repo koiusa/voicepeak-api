@@ -1,11 +1,15 @@
+/**
+ * VoiceVox Engine compatibility adapter
+ * Provides seamless integration with VoiceVox Engine API
+ */
 import axios from 'axios';
+import { Logger } from './utils/logger.js';
 
 /**
- * VoiceVox Engine との互換性を提供するアダプター
+ * VoiceVox Engine adapter class
  */
 export class VoiceVoxAdapter {
     constructor() {
-        // 環境変数からURLを取得（必須）
         this.baseURL = process.env.VOICEVOX_ENGINE_URL;
         
         if (!this.baseURL) {
@@ -19,56 +23,52 @@ export class VoiceVoxAdapter {
                 'Content-Type': 'application/json'
             }
         });
-        console.log(`VoiceVox Adapter初期化: ${this.baseURL}`);
+        
+        Logger.info(`VoiceVox Adapter初期化: ${this.baseURL}`);
     }
 
     /**
-     * スピーカー一覧を取得してナレーター形式に変換
+     * Get narrators list (speakers converted to narrator format)
+     * @returns {Promise<object>} Narrators object
      */
     async getNarrators() {
         try {
-            const response = await this.client.get('/speakers');
-            const speakers = response.data;
-            
-            // スピーカー名の一覧を抽出（重複除去）
+            const speakers = await this._getSpeakers();
             const narrators = [...new Set(speakers.map(speaker => speaker.name))];
-            
             return { narrators };
         } catch (error) {
-            throw new Error(`VoiceVox からのナレーター一覧取得に失敗: ${error.message}`);
+            throw this._createError('ナレーター一覧取得', error);
         }
     }
 
     /**
-     * 指定されたナレーターの感情一覧を取得
+     * Get emotions for specified narrator
+     * @param {string} narratorName - Narrator name
+     * @returns {Promise<object>} Emotions object
      */
     async getEmotions(narratorName) {
         try {
-            const response = await this.client.get('/speakers');
-            const speakers = response.data;
-            
-            // ナレーター名で検索
+            const speakers = await this._getSpeakers();
             const targetSpeaker = speakers.find(speaker => speaker.name === narratorName);
+            
             if (!targetSpeaker) {
                 throw new Error(`ナレーター "${narratorName}" が見つかりません`);
             }
             
-            // スタイル名を感情として抽出
             const emotions = targetSpeaker.styles.map(style => style.name);
-            
             return { emotions, narrator: narratorName };
         } catch (error) {
-            throw new Error(`VoiceVox からの感情一覧取得に失敗: ${error.message}`);
+            throw this._createError('感情一覧取得', error);
         }
     }
 
     /**
-     * デフォルトの感情一覧を取得（最初のスピーカーから）
+     * Get default emotions (from first available speaker)
+     * @returns {Promise<object>} Default emotions object
      */
     async getDefaultEmotions() {
         try {
-            const response = await this.client.get('/speakers');
-            const speakers = response.data;
+            const speakers = await this._getSpeakers();
             
             if (speakers.length === 0) {
                 throw new Error('利用可能なスピーカーが見つかりません');
@@ -76,87 +76,55 @@ export class VoiceVoxAdapter {
             
             const defaultSpeaker = speakers[0];
             const emotions = defaultSpeaker.styles.map(style => style.name);
-            
             return { emotions, narrator: defaultSpeaker.name };
         } catch (error) {
-            throw new Error(`VoiceVox からのデフォルト感情一覧取得に失敗: ${error.message}`);
+            throw this._createError('デフォルト感情一覧取得', error);
         }
     }
 
     /**
-     * VoiceVox API を使用して音声合成を実行
+     * Perform text-to-speech synthesis using VoiceVox API
+     * @param {object} params - Synthesis parameters
+     * @param {string} params.text - Text to synthesize
+     * @param {string} params.narrator - Narrator name
+     * @param {string} params.emotion - Emotion name
+     * @param {number} params.speed - Speech speed (50-200)
+     * @param {number} params.pitch - Pitch adjustment (-50 to 50)
+     * @returns {Promise<Buffer>} Audio buffer
      */
     async synthesize({ text, narrator, emotion, speed = 100, pitch = 0 }) {
         try {
-            console.log(`VoiceVox 音声合成: "${text}" (${narrator}, ${emotion})`);
+            Logger.info(`VoiceVox 音声合成: "${text}" (${narrator}, ${emotion})`);
             
-            // 1. ナレーターと感情からスピーカーIDを取得
-            const speakerId = await this.getSpeakerId(narrator, emotion);
+            // Get speaker ID from narrator and emotion
+            const speakerId = await this._getSpeakerId(narrator, emotion);
             
-            // 2. オーディオクエリを作成
-            const audioQuery = await this.createAudioQuery(text, speakerId);
+            // Create audio query
+            const audioQuery = await this._createAudioQuery(text, speakerId);
             
-            // 3. 速度とピッチを調整
-            this.adjustAudioQuery(audioQuery, speed, pitch);
+            // Adjust parameters
+            this._adjustAudioQueryParameters(audioQuery, speed, pitch);
             
-            // 4. 音声合成を実行
-            const audioBuffer = await this.performSynthesis(audioQuery, speakerId);
-            
-            return audioBuffer;
+            // Perform synthesis
+            return await this._performSynthesis(audioQuery, speakerId);
             
         } catch (error) {
-            throw new Error(`VoiceVox での音声合成に失敗: ${error.message}`);
+            throw this._createError('音声合成', error);
         }
     }
 
     /**
-     * ナレーター名と感情からスピーカーIDを取得
-     */
-    async getSpeakerId(narratorName, emotionName) {
-        const response = await this.client.get('/speakers');
-        const speakers = response.data;
-        
-        let targetSpeaker = null;
-        
-        if (narratorName) {
-            targetSpeaker = speakers.find(s => s.name === narratorName);
-            if (!targetSpeaker) {
-                throw new Error(`ナレーター "${narratorName}" が見つかりません`);
-            }
-        } else {
-            // デフォルトスピーカーを使用
-            targetSpeaker = speakers[0];
-            if (!targetSpeaker) {
-                throw new Error('利用可能なスピーカーが見つかりません');
-            }
-        }
-        
-        // 感情（スタイル）を検索
-        let targetStyle = null;
-        if (emotionName) {
-            targetStyle = targetSpeaker.styles.find(style => style.name === emotionName);
-            if (!targetStyle) {
-                // 感情が見つからない場合はデフォルトスタイルを使用
-                targetStyle = targetSpeaker.styles[0];
-                console.warn(`感情 "${emotionName}" が見つからないため、デフォルトスタイル "${targetStyle.name}" を使用`);
-            }
-        } else {
-            // デフォルトスタイルを使用
-            targetStyle = targetSpeaker.styles[0];
-        }
-        
-        return targetStyle.id;
-    }
-
-    /**
-     * オーディオクエリを作成
+     * Create audio query for given text and speaker
+     * @param {string} text - Text to process
+     * @param {number} speakerId - Speaker ID
+     * @param {object} options - Additional options
+     * @returns {Promise<object>} Audio query object
      */
     async createAudioQuery(text, speakerId, options = {}) {
         try {
-            console.log(`VoiceVox オーディオクエリ作成: "${text}" (speakerId: ${speakerId})`);
+            Logger.info(`VoiceVox オーディオクエリ作成: "${text}" (speakerId: ${speakerId})`);
             
-            // テキストの前処理
-            const processedText = this.preprocessText(text);
+            const processedText = this._preprocessText(text);
             
             const response = await this.client.post('/audio_query', null, {
                 params: {
@@ -165,97 +133,168 @@ export class VoiceVoxAdapter {
                 }
             });
             
-            const audioQuery = response.data;
+            const audioQuery = this._enhanceAudioQuery(response.data, options);
             
-            // デフォルト値の設定と検証
-            const enhancedAudioQuery = {
-                accent_phrases: audioQuery.accent_phrases || [],
-                speedScale: audioQuery.speedScale || 1.0,
-                pitchScale: audioQuery.pitchScale || 0.0,
-                intonationScale: audioQuery.intonationScale || 1.0,
-                volumeScale: audioQuery.volumeScale || 1.0,
-                prePhonemeLength: audioQuery.prePhonemeLength || 0.1,
-                postPhonemeLength: audioQuery.postPhonemeLength || 0.1,
-                outputSamplingRate: audioQuery.outputSamplingRate || 24000,
-                outputStereo: audioQuery.outputStereo || false,
-                kana: audioQuery.kana || '',
-                // オプションパラメータがあれば適用
-                ...options
-            };
-            
-            console.log(`オーディオクエリ作成成功: アクセント句数 ${enhancedAudioQuery.accent_phrases.length}`);
-            return enhancedAudioQuery;
+            Logger.info(`オーディオクエリ作成成功: アクセント句数 ${audioQuery.accent_phrases.length}`);
+            return audioQuery;
             
         } catch (error) {
-            if (error.response) {
-                const status = error.response.status;
-                const detail = error.response.data?.detail || error.response.statusText;
-                
-                if (status === 422) {
-                    throw new Error(`テキスト処理エラー: ${detail}`);
-                } else if (status === 404) {
-                    throw new Error(`スピーカーID ${speakerId} が見つかりません`);
-                } else {
-                    throw new Error(`VoiceVox API エラー (${status}): ${detail}`);
-                }
-            } else if (error.code === 'ECONNREFUSED') {
-                throw new Error('VoiceVox Engine への接続に失敗しました');
-            } else {
-                throw new Error(`オーディオクエリ作成失敗: ${error.message}`);
-            }
+            throw this._handleApiError(error, 'オーディオクエリ作成');
         }
     }
 
+    // Private helper methods
+
     /**
-     * テキストの前処理
+     * Get speakers list from VoiceVox API
+     * @private
      */
-    preprocessText(text) {
+    async _getSpeakers() {
+        const response = await this.client.get('/speakers');
+        return response.data;
+    }
+
+    /**
+     * Get speaker ID from narrator and emotion names
+     * @private
+     */
+    async _getSpeakerId(narratorName, emotionName) {
+        const speakers = await this._getSpeakers();
+        
+        const targetSpeaker = narratorName 
+            ? speakers.find(s => s.name === narratorName)
+            : speakers[0];
+        
+        if (!targetSpeaker) {
+            const errorMsg = narratorName 
+                ? `ナレーター "${narratorName}" が見つかりません`
+                : '利用可能なスピーカーが見つかりません';
+            throw new Error(errorMsg);
+        }
+        
+        let targetStyle = targetSpeaker.styles[0]; // Default style
+        
+        if (emotionName) {
+            const foundStyle = targetSpeaker.styles.find(style => style.name === emotionName);
+            if (foundStyle) {
+                targetStyle = foundStyle;
+            } else {
+                Logger.warn(`感情 "${emotionName}" が見つからないため、デフォルトスタイル "${targetStyle.name}" を使用`);
+            }
+        }
+        
+        return targetStyle.id;
+    }
+
+    /**
+     * Create audio query with validated parameters
+     * @private
+     */
+    async _createAudioQuery(text, speakerId) {
+        const processedText = this._preprocessText(text);
+        
+        const response = await this.client.post('/audio_query', null, {
+            params: {
+                text: processedText,
+                speaker: speakerId
+            }
+        });
+        
+        return response.data;
+    }
+
+    /**
+     * Preprocess text for synthesis
+     * @private
+     */
+    _preprocessText(text) {
         if (!text || typeof text !== 'string') {
             throw new Error('有効なテキストが必要です');
         }
         
-        // 基本的なテキスト正規化
-        let processed = text.trim();
+        let processed = text.trim()
+            .replace(/\s+/g, ' ') // Normalize whitespace
+            .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, ''); // Remove control chars
         
-        // 連続する空白を単一の空白に変換
-        processed = processed.replace(/\s+/g, ' ');
-        
-        // 制御文字を除去（ただし改行は保持）
-        processed = processed.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
-        
-        // 長すぎるテキストは警告
         if (processed.length > 1000) {
-            console.warn(`警告: テキストが長すぎます (${processed.length}文字)`);
+            Logger.warn(`警告: テキストが長すぎます (${processed.length}文字)`);
         }
         
         return processed;
     }
 
     /**
-     * オーディオクエリの速度とピッチを調整
+     * Enhance audio query with default values and options
+     * @private
      */
-    adjustAudioQuery(audioQuery, speed, pitch) {
-        // 速度調整（50-200 → 0.5-2.0）
+    _enhanceAudioQuery(audioQuery, options) {
+        return {
+            accent_phrases: audioQuery.accent_phrases || [],
+            speedScale: audioQuery.speedScale || 1.0,
+            pitchScale: audioQuery.pitchScale || 0.0,
+            intonationScale: audioQuery.intonationScale || 1.0,
+            volumeScale: audioQuery.volumeScale || 1.0,
+            prePhonemeLength: audioQuery.prePhonemeLength || 0.1,
+            postPhonemeLength: audioQuery.postPhonemeLength || 0.1,
+            outputSamplingRate: audioQuery.outputSamplingRate || 24000,
+            outputStereo: audioQuery.outputStereo || false,
+            kana: audioQuery.kana || '',
+            ...options
+        };
+    }
+
+    /**
+     * Adjust audio query parameters for speed and pitch
+     * @private
+     */
+    _adjustAudioQueryParameters(audioQuery, speed, pitch) {
         audioQuery.speedScale = speed / 100.0;
-        
-        // ピッチ調整（-50〜50 → pitchScale）
-        // VoiceVoxのピッチ調整範囲に合わせて変換
         audioQuery.pitchScale = pitch / 50.0;
-        
         return audioQuery;
     }
 
     /**
-     * 音声合成を実行
+     * Perform synthesis with validated audio query
+     * @private
      */
-    async performSynthesis(audioQuery, speakerId) {
+    async _performSynthesis(audioQuery, speakerId) {
         const response = await this.client.post('/synthesis', audioQuery, {
-            params: {
-                speaker: speakerId
-            },
+            params: { speaker: speakerId },
             responseType: 'arraybuffer'
         });
         
         return Buffer.from(response.data);
+    }
+
+    /**
+     * Handle API errors with context
+     * @private
+     */
+    _handleApiError(error, context) {
+        if (error.response) {
+            const status = error.response.status;
+            const detail = error.response.data?.detail || error.response.statusText;
+            
+            switch (status) {
+                case 422:
+                    return new Error(`テキスト処理エラー: ${detail}`);
+                case 404:
+                    return new Error(`リソースが見つかりません: ${detail}`);
+                default:
+                    return new Error(`VoiceVox API エラー (${status}): ${detail}`);
+            }
+        } else if (error.code === 'ECONNREFUSED') {
+            return new Error('VoiceVox Engine への接続に失敗しました');
+        } else {
+            return new Error(`${context}失敗: ${error.message}`);
+        }
+    }
+
+    /**
+     * Create standardized error with context
+     * @private
+     */
+    _createError(context, originalError) {
+        return new Error(`VoiceVox での${context}に失敗: ${originalError.message}`);
     }
 }

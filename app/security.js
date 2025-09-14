@@ -1,33 +1,48 @@
-// セキュリティユーティリティ関数
+/**
+ * Security utilities for the Voicepeak API
+ * Provides input validation, sanitization, and security controls
+ */
 import { spawn } from 'child_process';
 import path from 'path';
+import { CONFIG } from './config/constants.js';
 
 /**
- * コマンドインジェクション対策
- * 安全な文字列のみを許可し、危険な文字をエスケープ
+ * Security utility class with comprehensive validation and sanitization
  */
 export class SecurityUtils {
     
+    // Common validation patterns
+    static PATTERNS = {
+        NARRATOR: /^[a-zA-Z0-9\s\-_\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]+$/,
+        EMOTION: /^[a-zA-Z][a-zA-Z0-9_]*(?:=[0-9]+)?$/,
+        DANGEROUS_CHARS: /[`$\\;&|<>]/,
+        CONTROL_CHARS: /[\x00-\x1F\x7F]/,
+        HTML_TAGS: /<[^>]*>/,
+        JAVASCRIPT: /javascript:/i,
+        SQL_INJECTION: /[';"\-\-\/\*\*\/xX]/,
+        SQL_KEYWORDS: /\b(DROP|DELETE|INSERT|UPDATE|SELECT|UNION|ALTER|CREATE|EXEC|EXECUTE)\b/i,
+        COMMAND_INJECTION: /[\$\(\)`]|\$\(.*\)|`.*`/
+    };
+
+    // Rate limiting storage
+    static rateLimiter = new Map();
+
     /**
-     * ナレーター名の検証とサニタイズ
-     * @param {string} narrator - ナレーター名
-     * @returns {string} サニタイズされたナレーター名
-     * @throws {Error} 不正な文字が含まれる場合
+     * Validate and sanitize narrator name
+     * @param {string} narrator - Narrator name to validate
+     * @returns {string} Sanitized narrator name
+     * @throws {Error} If validation fails
      */
     static validateNarrator(narrator) {
         if (!narrator || typeof narrator !== 'string') {
             throw new Error('ナレーター名が無効です');
         }
 
-        // 許可する文字: 英数字、スペース、ハイフン、アンダースコア、日本語文字
-        const allowedPattern = /^[a-zA-Z0-9\s\-_\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]+$/;
-        
-        if (!allowedPattern.test(narrator)) {
+        if (!this.PATTERNS.NARRATOR.test(narrator)) {
             throw new Error('ナレーター名に許可されていない文字が含まれています');
         }
 
-        // 長さ制限
-        if (narrator.length > 50) {
+        if (narrator.length > CONFIG.TEXT_LIMITS.MAX_NARRATOR_LENGTH) {
             throw new Error('ナレーター名が長すぎます');
         }
 
@@ -35,19 +50,17 @@ export class SecurityUtils {
     }
 
     /**
-     * 感情パラメータの検証とサニタイズ
-     * @param {string} emotion - 感情パラメータ
-     * @returns {string} サニタイズされた感情パラメータ
+     * Validate and sanitize emotion parameter
+     * @param {string} emotion - Emotion parameter to validate
+     * @returns {string} Sanitized emotion parameter
+     * @throws {Error} If validation fails
      */
     static validateEmotion(emotion) {
         if (!emotion || typeof emotion !== 'string') {
             throw new Error('感情パラメータが無効です');
         }
 
-        // 感情パラメータの形式: emotion=value または emotion のみ
-        const emotionPattern = /^[a-zA-Z][a-zA-Z0-9_]*(?:=[0-9]+)?$/;
-        
-        if (!emotionPattern.test(emotion)) {
+        if (!this.PATTERNS.EMOTION.test(emotion)) {
             throw new Error('感情パラメータの形式が無効です');
         }
 
@@ -55,109 +68,73 @@ export class SecurityUtils {
     }
 
     /**
-     * テキストの検証とサニタイズ
-     * @param {string} text - 音声合成するテキスト
-     * @returns {string} サニタイズされたテキスト
+     * Validate and sanitize text input
+     * @param {string} text - Text to validate
+     * @returns {string} Sanitized text
+     * @throws {Error} If validation fails
      */
     static validateText(text) {
         if (!text || typeof text !== 'string') {
             throw new Error('テキストが無効です');
         }
 
-        if (text.trim().length === 0) {
+        const trimmedText = text.trim();
+        if (trimmedText.length === 0) {
             throw new Error('テキストが空です');
         }
 
-        if (text.length > 1000) {
-            throw new Error('テキストが長すぎます（最大1000文字）');
+        if (trimmedText.length > CONFIG.TEXT_LIMITS.MAX_LENGTH) {
+            throw new Error(`テキストが長すぎます（最大${CONFIG.TEXT_LIMITS.MAX_LENGTH}文字）`);
         }
 
-        // 危険な文字の検出（除去ではなく、検出したらエラー）
-        if (/[`$\\;&|<>]/.test(text)) {
-            throw new Error('テキストに不正な文字が含まれています');
-        }
-        
-        if (/[\x00-\x1F]/.test(text)) {
-            throw new Error('テキストに制御文字が含まれています');
-        }
+        // Security checks
+        this._checkForDangerousContent(trimmedText, 'テキスト');
 
-        // HTMLタグの検出
-        if (/<[^>]*>/.test(text)) {
-            throw new Error('テキストにHTMLタグが含まれています');
-        }
-
-        // JavaScriptの検出
-        if (/javascript:/i.test(text)) {
-            throw new Error('テキストにJavaScriptが含まれています');
-        }
-
-        return text.trim();
+        return trimmedText;
     }
 
     /**
-     * 数値パラメータの検証
-     * @param {any} value - 検証する値
-     * @param {number} min - 最小値
-     * @param {number} max - 最大値
-     * @param {string} name - パラメータ名
-     * @returns {number} 検証済みの数値
+     * Validate numeric parameter with range checking
+     * @param {any} value - Value to validate
+     * @param {number} min - Minimum allowed value
+     * @param {number} max - Maximum allowed value
+     * @param {string} paramName - Parameter name for error messages
+     * @returns {number} Validated numeric value
+     * @throws {Error} If validation fails
      */
-    static validateNumericParam(value, min, max, name) {
-        // まず型と文字列の検証
+    static validateNumericParam(value, min, max, paramName) {
         if (value === null || value === undefined) {
-            throw new Error(`${name}が指定されていません`);
+            throw new Error(`${paramName}が指定されていません`);
         }
         
-        // 文字列型の場合、SQLインジェクションやコマンドインジェクションをチェック
+        // Security checks for string inputs
         if (typeof value === 'string') {
-            // SQLインジェクションパターンの検出
-            if (/[';"\-\-\/\*\*\/xX]/.test(value) || 
-                /\b(DROP|DELETE|INSERT|UPDATE|SELECT|UNION|ALTER|CREATE|EXEC|EXECUTE)\b/i.test(value)) {
-                throw new Error(`${name}にSQLインジェクションの疑いがある文字が含まれています`);
-            }
-            
-            // コマンドインジェクションパターンの検出
-            if (/[`$\\;&|<>]/.test(value) || 
-                /\$\(.*\)/.test(value) || 
-                /`.*`/.test(value)) {
-                throw new Error(`${name}にコマンドインジェクションの疑いがある文字が含まれています`);
-            }
-            
-            // 制御文字の検出
-            if (/[\x00-\x1F\x7F]/.test(value)) {
-                throw new Error(`${name}に制御文字が含まれています`);
-            }
+            this._checkForSecurityThreats(value, paramName);
         }
         
-        const num = Number(value);
+        const numericValue = Number(value);
         
-        if (isNaN(num)) {
-            throw new Error(`${name}は数値である必要があります`);
-        }
-        
-        // 無限大や異常値のチェック
-        if (!isFinite(num)) {
-            throw new Error(`${name}は有限の数値である必要があります`);
+        if (!this._isValidNumber(numericValue)) {
+            throw new Error(`${paramName}は有効な数値である必要があります`);
         }
 
-        if (num < min || num > max) {
-            throw new Error(`${name}は${min}から${max}の間である必要があります`);
+        if (numericValue < min || numericValue > max) {
+            throw new Error(`${paramName}は${min}から${max}の間である必要があります`);
         }
 
-        return num;
+        return numericValue;
     }
 
     /**
-     * 安全なコマンド実行（配列形式）
-     * @param {string} command - 実行するコマンド
-     * @param {string[]} args - コマンド引数の配列
-     * @param {object} options - 実行オプション
-     * @returns {Promise<string|Buffer>} 実行結果
+     * Secure command execution with array-based arguments
+     * @param {string} command - Command to execute
+     * @param {string[]} args - Command arguments array
+     * @param {object} options - Execution options
+     * @returns {Promise<string|Buffer>} Execution result
      */
     static async safeExec(command, args = [], options = {}) {
         return new Promise((resolve, reject) => {
-            // バイナリモードの処理
-            let isBinary = options.encoding === 'buffer';
+            const isBinary = options.encoding === 'buffer';
             if (isBinary) delete options.encoding;
             
             const child = spawn(command, args, {
@@ -184,11 +161,7 @@ export class SecurityUtils {
                 if (code !== 0) {
                     reject(new Error(`コマンド実行エラー (終了コード: ${code}): ${stderr}`));
                 } else {
-                    if (isBinary) {
-                        resolve(Buffer.concat(stdout));
-                    } else {
-                        resolve(stdout.trim());
-                    }
+                    resolve(isBinary ? Buffer.concat(stdout) : stdout.trim());
                 }
             });
 
@@ -196,30 +169,29 @@ export class SecurityUtils {
                 reject(new Error(`コマンド実行失敗: ${error.message}`));
             });
 
-            // タイムアウト設定
+            // Use configurable timeout
             setTimeout(() => {
                 child.kill();
                 reject(new Error('コマンド実行がタイムアウトしました'));
-            }, 30000); // 30秒タイムアウト
+            }, CONFIG.TIMEOUTS.COMMAND_EXECUTION);
         });
     }
 
     /**
-     * ファイルパスの検証
-     * @param {string} filePath - 検証するファイルパス
-     * @param {string} allowedDir - 許可されたディレクトリ
-     * @returns {string} 正規化されたパス
+     * Validate file path against directory traversal attacks
+     * @param {string} filePath - File path to validate
+     * @param {string} allowedDir - Allowed base directory
+     * @returns {string} Normalized and validated path
+     * @throws {Error} If path is invalid or dangerous
      */
     static validateFilePath(filePath, allowedDir) {
         const normalizedPath = path.normalize(filePath);
         const normalizedAllowedDir = path.normalize(allowedDir);
 
-        // パストラバーサル攻撃を防ぐ
         if (!normalizedPath.startsWith(normalizedAllowedDir)) {
             throw new Error('不正なファイルパスです');
         }
 
-        // 危険な文字をチェック
         if (/[<>:"|?*]/.test(normalizedPath)) {
             throw new Error('ファイルパスに不正な文字が含まれています');
         }
@@ -228,11 +200,13 @@ export class SecurityUtils {
     }
 
     /**
-     * レート制限チェック用のシンプルな実装
+     * Check rate limits for IP addresses
+     * @param {string} ip - Client IP address
+     * @param {number} maxRequests - Maximum requests allowed
+     * @param {number} windowMs - Time window in milliseconds
+     * @throws {Error} If rate limit is exceeded
      */
-    static rateLimiter = new Map();
-
-    static checkRateLimit(ip, maxRequests = 10, windowMs = 60000) {
+    static checkRateLimit(ip, maxRequests = CONFIG.RATE_LIMIT.GET_REQUESTS, windowMs = CONFIG.RATE_LIMIT.WINDOW_MS) {
         const now = Date.now();
         const windowStart = now - windowMs;
 
@@ -241,7 +215,6 @@ export class SecurityUtils {
         }
 
         const requests = this.rateLimiter.get(ip);
-        // 古いリクエストを削除
         const validRequests = requests.filter(time => time > windowStart);
         
         if (validRequests.length >= maxRequests) {
@@ -250,5 +223,55 @@ export class SecurityUtils {
 
         validRequests.push(now);
         this.rateLimiter.set(ip, validRequests);
+    }
+
+    // Private helper methods
+
+    /**
+     * Check for dangerous content in text
+     * @private
+     */
+    static _checkForDangerousContent(text, context) {
+        if (this.PATTERNS.DANGEROUS_CHARS.test(text)) {
+            throw new Error(`${context}に不正な文字が含まれています`);
+        }
+        
+        if (this.PATTERNS.CONTROL_CHARS.test(text)) {
+            throw new Error(`${context}に制御文字が含まれています`);
+        }
+
+        if (this.PATTERNS.HTML_TAGS.test(text)) {
+            throw new Error(`${context}にHTMLタグが含まれています`);
+        }
+
+        if (this.PATTERNS.JAVASCRIPT.test(text)) {
+            throw new Error(`${context}にJavaScriptが含まれています`);
+        }
+    }
+
+    /**
+     * Check for security threats in string inputs
+     * @private
+     */
+    static _checkForSecurityThreats(value, paramName) {
+        if (this.PATTERNS.SQL_INJECTION.test(value) || this.PATTERNS.SQL_KEYWORDS.test(value)) {
+            throw new Error(`${paramName}にSQLインジェクションの疑いがある文字が含まれています`);
+        }
+        
+        if (this.PATTERNS.COMMAND_INJECTION.test(value)) {
+            throw new Error(`${paramName}にコマンドインジェクションの疑いがある文字が含まれています`);
+        }
+        
+        if (this.PATTERNS.CONTROL_CHARS.test(value)) {
+            throw new Error(`${paramName}に制御文字が含まれています`);
+        }
+    }
+
+    /**
+     * Check if a number is valid and finite
+     * @private
+     */
+    static _isValidNumber(num) {
+        return !isNaN(num) && isFinite(num);
     }
 }
